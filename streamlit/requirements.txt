@@ -1,0 +1,6 @@
+streamlit==1.48.0
+langchain
+langchain-core
+langchain-openai
+pandas
+python-dotenv
