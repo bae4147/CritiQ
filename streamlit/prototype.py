@@ -10,6 +10,10 @@ import json
 
 load_dotenv()
 
+import streamlit as st
+
+openai.api_key = st.secrets["OPENAI_API_KEY"]
+
 # Define the state dictionary for type hinting
 class State(TypedDict):
     statement: str
