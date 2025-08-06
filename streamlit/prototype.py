@@ -1,22 +1,16 @@
-# graph_prototype_v1.py
+# prototype.py (Refactored for sequential execution)
 
 import os
-from typing import Annotated, TypedDict
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
+from typing import TypedDict
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableLambda
 from langchain_openai import ChatOpenAI
-from langchain_community.chat_models import ChatHuggingFace
 from dotenv import load_dotenv
+import re
+import json
 
 load_dotenv()
 
-# LangSmith logging (optional)
-from langchain_teddynote import logging
-logging.langsmith("SocratiQ_demo")
-
-##### STEP 1: Define State #####
+# Define the state dictionary for type hinting
 class State(TypedDict):
     statement: str
     user_reasoning: str
@@ -24,46 +18,54 @@ class State(TypedDict):
     socratic_questions: list[str]
     persona_responses: list[dict]
     best_question: str
-    best_response: dict 
+    best_response: dict
     final_user_response: dict
-    # refinement_data: list[dict]
-    messages: Annotated[list, add_messages]
-    persona_prompt_history: list[str]  # iteration마다 사용된 system prompt 저장
-    current_persona_prompt: str        # 항상 현재 prompt를 가리킴
+    persona_prompt_history: list[str]
+    current_persona_prompt: str
     textual_loss: str
     textual_gradient: str
     statements: list[str]
-    current_index: int
     iteration_logs: list[dict]
-    user_reasonings: list[str]
-    user_judgements: list[str]
+    current_index: int
 
-    
-def prepare_next_iteration(state):
-    i = state["current_index"]
-    state.update({
-        "statement": state["statements"][i],
-        "user_reasoning": state["user_reasonings"][i],
-        "user_judgement": state["user_judgements"][i],
-        "socratic_questions": [],
-        "persona_responses": [],
-        "best_question": None,
-        "best_response": None,
-        "final_user_response": None,
-        # "refinement_data": [],
-        "iteration_logs": [],
-        "textual_loss": None,
-        "textual_gradient": None,
-        "iteration": i,
-        "current_persona_prompt": DEFAULT_PERSONA_SYSTEM_PROMPT,
-        "persona_prompt_history": [DEFAULT_PERSONA_SYSTEM_PROMPT]
-    })
-    return state
+# --- Helper Functions (unchanged from original) ---
 
+def extract_between_tags(text, tag="IMPROVED_VARIABLE"):
+    pattern = rf"<{tag}>\s*(.*?)\s*</{tag}>"
+    match = re.search(pattern, text, re.DOTALL)
+    return match.group(1).strip() if match else text.strip()
 
-##### STEP 2: Define Models #####
-QG_model = ChatOpenAI(model="gpt-4o-mini", temperature=0.9)  # diversified output
+def parse_persona_output(text: str) -> tuple[str, str]:
+    reasoning = extract_between_tags(text, "UPDATED_REASONING")
+    judgement = extract_between_tags(text, "UPDATED_JUDGEMENT")
+    return reasoning, judgement
 
+def parse_evaluator_response(response_text):
+    try:
+        judgement_score = int(re.search(r"Judgement Score\s*:\s*(\d)", response_text).group(1))
+        reasoning_score = int(re.search(r"Reasoning Path Score\s*:\s*(\d)", response_text).group(1))
+        certainty_score = int(re.search(r"Certainty Score\s*:\s*(\d)", response_text).group(1))
+        is_good_question = re.search(r"Is Good Question\s*:\s*(Yes|No)", response_text, re.IGNORECASE).group(1)
+        explanation_judgement = re.search(r"Explanation \(Judgement\)\s*:\s*(.+?)(?=\nExplanation \(Reasoning Path\)|\Z)", response_text, re.DOTALL).group(1).strip()
+        explanation_reasoning = re.search(r"Explanation \(Reasoning Path\)\s*:\s*(.+?)(?=\nExplanation \(Certainty\)|\Z)", response_text, re.DOTALL).group(1).strip()
+        explanation_certainty = re.search(r"Explanation \(Certainty\)\s*:\s*(.+)", response_text, re.DOTALL).group(1).strip()
+        return {
+            "judgement_score": judgement_score,
+            "reasoning_path_score": reasoning_score,
+            "certainty_score": certainty_score,
+            "total_score": judgement_score + reasoning_score + certainty_score,
+            "is_good_question": is_good_question,
+            "explanation_judgement": explanation_judgement,
+            "explanation_reasoning": explanation_reasoning,
+            "explanation_certainty": explanation_certainty
+        }
+    except Exception as e:
+        print("Parsing error:", e)
+        return None
+
+# --- Model Definitions (unchanged from original) ---
+
+QG_model = ChatOpenAI(model="gpt-4o-mini", temperature=0.9)
 QG_prompt = ChatPromptTemplate.from_messages([
     ("system", """
 You are a Socratic assistant designed to help users critically reflect on argumentative statements.
@@ -86,7 +88,6 @@ user_reasoning: {user_reasoning}
 user_judgement: {user_judgement}
 """),
 ])
-
 QG_chain = QG_prompt | QG_model
 
 evaluator_prompt = ChatPromptTemplate.from_messages([
@@ -135,36 +136,8 @@ revised judgement: {persona_judgement}
 """),
 ])
 
-
 evaluator_chain = evaluator_prompt | QG_model
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
-from langchain_huggingface import HuggingFacePipeline
-# Persona Model (Hugging Face)
-# model_id = "meta-llama/Llama-3.1-8B"  # 원하는 모델로 교체 가능 openai-community/gpt2-large meta-llama/Llama-3.1-8B
-
-# tokenizer = AutoTokenizer.from_pretrained(model_id)
-# tokenizer.pad_token = tokenizer.eos_token
-
-# model = AutoModelForCausalLM.from_pretrained(
-#     model_id,
-#     device_map="auto",
-#     low_cpu_mem_usage=True,
-#     quantization_config=BitsAndBytesConfig(load_in_4bit=True)
-#     )
-
-# pipe = pipeline(
-#     "text-generation", # "question-answering" https://huggingface.co/docs/transformers/v4.53.2/en/main_classes/pipelines#transformers.QuestionAnsweringPipeline
-#     model=model,
-#     # torch_dtype=torch.float16,
-#     tokenizer=tokenizer,
-#     max_new_tokens=512,
-#     do_sample=False,
-#     temperature=None,   # ⚠️ 이렇게 명시적으로 제거
-#     top_p=None
-# )
-
-# persona_model = HuggingFacePipeline(pipeline=pipe)
 persona_model = ChatOpenAI(model="gpt-4o-mini")
 
 DEFAULT_PERSONA_SYSTEM_PROMPT = """
@@ -176,13 +149,15 @@ Your task is to generate how the user would likely revise their **reasoning path
 
 ### Output
 
-You must output the user's likely updated thoughts as two parts:
+⚠️ You must return your result inside the following tags:
 
-1. **Revised Reasoning Path**  
-(How the user's explanation changes after thinking about the question)
+<UPDATED_REASONING>
+... (How the user's explanation changes after thinking about the question) ...
+</UPDATED_REASONING>
 
-2. **Updated Judgement**  
-(Does the user now think the argument is still valid or invalid?)
+<UPDATED_JUDGEMENT>
+... (Does the user now think the argument is still valid or invalid?) ...
+</UPDATED_JUDGEMENT>
 
 """
 
@@ -191,11 +166,10 @@ PERSONA_USER_PROMPT = ChatPromptTemplate.from_messages([
 Statement: {statement}
 User's initial reasoning: {user_reasoning}
 User's initial judgement: {user_judgement}
-Socratic question posed to the user: {socratic_question}
+Socratic question posed to the use<r>\n{socratic_question}
 """)
 ])
 
-### CHAINS FOR PERSONA REFINEMENT ###
 loss_prompt = ChatPromptTemplate.from_messages([
     ("system", """
 You are an expert analyst trained to assess how closely a simulated reasoning (from a persona) matches the actual reasoning of a real user.
@@ -235,7 +209,6 @@ User Judgement: {user_judgement}
 
 loss_chain = loss_prompt | persona_model
 
-
 gradient_prompt = ChatPromptTemplate.from_messages([
     ("system", """You are part of an optimization system that improves a persona simulation model.
 
@@ -259,7 +232,6 @@ Please output your feedback between <GRADIENT> and </GRADIENT> tags.
 {textual_loss}
 """)
 ])
-
 
 gradient_chain = gradient_prompt | persona_model
 
@@ -296,96 +268,18 @@ Be concise and faithful to the original tone. Avoid redundant verbosity.
 """)
 ])
 
-
 update_chain = update_prompt | persona_model
 
+# --- Sequential Functions (replacing LangGraph nodes) ---
 
-
-import re
-
-def extract_after_header(text, header="Gradient:"):
-    parts = text.split(header, maxsplit=1)
-    return parts[1].strip() if len(parts) > 1 else text.strip()
-
-def extract_between_tags(text, tag="IMPROVED_VARIABLE"):
-    pattern = rf"<{tag}>\s*(.*?)\s*</{tag}>"
-    match = re.search(pattern, text, re.DOTALL)
-    return match.group(1).strip() if match else text.strip()
-
-def parse_persona_output(text: str) -> tuple[str, str]:
-    """
-    Parse the persona model output to extract:
-    - Revised Reasoning Path
-    - Updated Judgement
-
-    Returns:
-        (reasoning: str, judgement: str)
-    """
-    # 정규식 기반으로 Revised Reasoning Path와 Updated Judgement 추출
-    reasoning_match = re.search(
-        r"Revised Reasoning Path:\s*(.*?)(?=Updated Judgement:|$)", 
-        text, 
-        re.DOTALL
-    )
-    judgement_match = re.search(
-        r"Updated Judgement:\s*(.*)", 
-        text, 
-        re.DOTALL
-    )
-
-    reasoning = reasoning_match.group(1).strip() if reasoning_match else ""
-    judgement = judgement_match.group(1).strip() if judgement_match else ""
-
-    return reasoning, judgement
-
-
-def parse_evaluator_response(response_text):
-    try:
-        # 점수 추출
-        judgement_score = int(re.search(r"Judgement Score\s*:\s*(\d)", response_text).group(1))
-        reasoning_score = int(re.search(r"Reasoning Path Score\s*:\s*(\d)", response_text).group(1))
-        certainty_score = int(re.search(r"Certainty Score\s*:\s*(\d)", response_text).group(1))
-
-        # Yes/No 추출
-        is_good_question = re.search(r"Is Good Question\s*:\s*(Yes|No)", response_text, re.IGNORECASE).group(1)
-
-        # 각 explanation 추출
-        explanation_judgement = re.search(r"Explanation \(Judgement\)\s*:\s*(.+?)(?=\nExplanation \(Reasoning Path\)|\Z)", response_text, re.DOTALL).group(1).strip()
-        explanation_reasoning = re.search(r"Explanation \(Reasoning Path\)\s*:\s*(.+?)(?=\nExplanation \(Certainty\)|\Z)", response_text, re.DOTALL).group(1).strip()
-        explanation_certainty = re.search(r"Explanation \(Certainty\)\s*:\s*(.+)", response_text, re.DOTALL).group(1).strip()
-
-        return {
-            "judgement_score": judgement_score,
-            "reasoning_path_score": reasoning_score,
-            "certainty_score": certainty_score,
-            "total_score": judgement_score + reasoning_score + certainty_score,
-            "is_good_question": is_good_question,
-            "explanation_judgement": explanation_judgement,
-            "explanation_reasoning": explanation_reasoning,
-            "explanation_certainty": explanation_certainty
-        }
-
-    except Exception as e:
-        print("Parsing error:", e)
-        return None
-
-
-##### STEP 3: Node Functions #####
-
-def should_continue(state):
-    return "continue" if state["current_index"] < len(state["statements"]) else "end"
-
-def initialize_state(statements: list[str], reasonings: list[str], judgements: list[str]) -> State:
+def initialize_state(statements: list[str]) -> State:
     return {
-        "statements": statements, # "I think it is valid. because a factor of 20 is a large gap between the two groups.", # I think violent video games can make people more aggressive. In this case, someone stabbed another person after losing in a game, so the argument seems valid. I've also seen news stories where people who play violent games act violently in real life, so it feels like the conclusion makes sense.
-        "user_reasonings": reasonings, # "In the United States, racial stratification still occurs. The racial wealth gap between African Americans and White Americans for the same job is found to be a factor of twenty.", # Violent video games causes people to be aggressive in the real world. A gamer stabbed another after being beaten in the online game Counter-Strike.
-        "user_judgements": judgements,
+        "statements": statements,
         "current_index": 0,
         "iteration_logs": [],
-        # 첫 statement를 위한 초기화도 바로 세팅
         "statement": statements[0],
-        "user_reasoning": reasonings[0],
-        "user_judgement": judgements[0],
+        "user_reasoning": "",
+        "user_judgement": "",
         "socratic_questions": [],
         "persona_responses": [],
         "best_question": None,
@@ -397,7 +291,8 @@ def initialize_state(statements: list[str], reasonings: list[str], judgements: l
         "textual_gradient": None,
     }
 
-def generate_question(state: State):
+def generate_and_evaluate_questions(state: State) -> State:
+    print("➡️ generate_and_evaluate_questions started")
     questions = [
         QG_chain.invoke({
             "statement": state["statement"],
@@ -407,43 +302,40 @@ def generate_question(state: State):
         for _ in range(5)
     ]
     state["socratic_questions"] = questions
-    return state
 
-def simulate_persona_response(state: State):
-
+    # Simulate persona responses
     persona_prompt = ChatPromptTemplate.from_messages(
         [("system", state["current_persona_prompt"])] + PERSONA_USER_PROMPT.messages
     )
-
     persona_chain = persona_prompt | persona_model
-
     responses = []
-    for q in state["socratic_questions"]:
+    for q in questions:
         result = persona_chain.invoke({
             "statement": state["statement"],
             "user_reasoning": state["user_reasoning"],
             "user_judgement": state["user_judgement"],
             "socratic_question": q
         }).content
-        # })
 
-        r, j = parse_persona_output(result)
+        r = extract_between_tags(result, "UPDATED_REASONING")
+        j = extract_between_tags(result, "UPDATED_JUDGEMENT")
+
+        print("⭐️ 파싱 확인 1 : persona r, j 파싱")
+        # print(f'<전체 결과>\n{result}')
+        # print(f"<r>\n{r}")
+        # print(f"<j>\n{j}")
 
         responses.append({
             "question": q,
             "reasoning": r,
             "judgement": j or state["user_judgement"]
         })
-
     state["persona_responses"] = responses
-    return state
 
-def evaluate_question(state: State):
-    
-    # use judgement change as a proxy for impact
+    # Evaluate questions
     best = None
     best_score = -1
-    for resp in state["persona_responses"]:
+    for resp in responses:
         response_text = evaluator_chain.invoke({
             "user_reasoning": state["user_reasoning"],
             "user_judgement": state["user_judgement"],
@@ -451,37 +343,30 @@ def evaluate_question(state: State):
             "persona_reasoning": resp["reasoning"],
             "persona_judgement": resp["judgement"]
         }).content.strip()
-
-
         score_result = parse_evaluator_response(response_text)
 
-        resp["total_score"] = score_result["total_score"] # state["persona_responses"][i]["total_score"]
+        print("⭐️ 파싱 확인 2 : score_result")
+        # print(f'<전체 결과>\n{response_text}')
+        # print(f"<score_result>\n{score_result}")
+
+        if score_result is None: continue
+        resp["total_score"] = score_result["total_score"]
         resp["score_result"] = score_result
-        
         if best_score < score_result["total_score"]:
             best_score = score_result["total_score"]
             best = resp
-
-    state["best_question"] = best["question"]
+    
+    state["best_question"] = best["question"] if best else None
     state["best_response"] = best
+    print("✅ generate_and_evaluate_questions 실행 완료")
     return state
 
-def ask_user_response(state: State):
-    print("\n[User] Please respond to the Socratic Question:")
-    print("Statement:", state["statement"])
-    print("Question:", state["best_question"])
-    new_reasoning = input("Updated Reasoning: ")
-    new_judgement = input("Updated Judgement (valid/invalid): ")
-    state["final_user_response"] = {
-        "reasoning": new_reasoning,
-        "judgement": new_judgement
-    }
-    return state
-
-def compute_textual_loss(state: State):
+def refine_persona(state: State) -> State:
+    print("➡️ refine_persona started")
     persona = state["best_response"]
     user = state["final_user_response"]
 
+    # Compute textual loss
     loss_text = loss_chain.invoke({
         "socratic_question": state["best_question"],
         "persona_reasoning": persona["reasoning"],
@@ -489,43 +374,50 @@ def compute_textual_loss(state: State):
         "user_reasoning": user["reasoning"],
         "user_judgement": user["judgement"]
     }).content.strip()
-    # })
-
     state["textual_loss"] = loss_text
-    return state
 
-def generate_textual_gradient(state: State):
+    # Generate textual gradient
     gradient_raw = gradient_chain.invoke({
-        "textual_loss": state["textual_loss"]
+        "textual_loss": loss_text
     }).content.strip()
-    # })
-
     gradient = extract_between_tags(gradient_raw, tag="GRADIENT")
-
     state["textual_gradient"] = gradient
-    return state
+    
+    print("⭐️ 파싱 확인 3 : gradient")
+    # print(f'<전체 결과>\n{gradient_raw}')
+    # print(f"gradient: {gradient}")
 
-def refine_persona_prompt(state: State):
+    # Refine persona prompt
     update_prompt_raw = update_chain.invoke({
         "previous_prompt": state["current_persona_prompt"],
-        "gradient_feedback": state["textual_gradient"]
+        "gradient_feedback": gradient
     }).content.strip()
-    # })
-
     update_prompt = extract_between_tags(update_prompt_raw, tag="IMPROVED_VARIABLE")
 
+    print("⭐️ 파싱 확인 4 : update_prompt")
+    print(f'<전체 결과>\n{update_prompt_raw}')
+    print(f"update_prompt: {update_prompt}")
+    
     state["current_persona_prompt"] = update_prompt
+    state["persona_prompt_history"].append(update_prompt)
+
+    print("✅ refine_persona 실행 완료")
     return state
 
-def finalize_iteration_log(state):
+def finalize_iteration_log(state: State) -> State:
+    print("➡️ finalize_iteration_log")
     iteration_data = {
         "iteration": state["current_index"],
         "statement": state["statement"],
+        "initial_user_response": {
+            "reasoning": state["user_reasoning"],
+            "judgement": state["user_judgement"]
+        },
         "question_generation": {
-            "questions": state["socratic_questions"],
-            "responses": state["persona_responses"],
             "best_question": state["best_question"],
-            "best_response": state["best_response"],
+            "best_persona_response": state["best_response"],
+            "all_generated_questions": state["socratic_questions"],
+            "all_persona_responses": state["persona_responses"]
         },
         "final_user_response": {
             "reasoning": state["final_user_response"]["reasoning"],
@@ -534,66 +426,10 @@ def finalize_iteration_log(state):
         "refinement": {
             "textual_loss": state["textual_loss"],
             "textual_gradient": state["textual_gradient"],
-            "update_prompt": state["current_persona_prompt"],
+            "refined_persona_prompt": state["current_persona_prompt"],
         }
     }
-    
     state["iteration_logs"].append(iteration_data)
     state["current_index"] += 1
+    print("✅ finalize_iteration_log 실행 완료")
     return state
-
-
-##### STEP 4: Build Graph #####
-# 1. 그래프 생성
-workflow = StateGraph(State)
-
-# 2. 노드 등록
-# workflow.add_node("initialize_state", initialize_state)  # optional if used externally
-workflow.add_node("prepare_next_iteration", prepare_next_iteration)
-workflow.add_node("generate_question", generate_question)
-workflow.add_node("simulate_persona_response", simulate_persona_response)
-workflow.add_node("evaluate_question", evaluate_question)
-workflow.add_node("ask_user_response", ask_user_response)
-workflow.add_node("compute_textual_loss", compute_textual_loss)
-workflow.add_node("generate_textual_gradient", generate_textual_gradient)
-workflow.add_node("refine_persona_prompt", refine_persona_prompt)
-workflow.add_node("finalize_iteration_log", finalize_iteration_log)
-
-# 3. entry point
-workflow.set_entry_point("generate_question")  # initialize_state is external
-
-# 4. 노드 간 연결
-workflow.add_edge("prepare_next_iteration", "generate_question")
-workflow.add_edge("generate_question", "simulate_persona_response")
-workflow.add_edge("simulate_persona_response", "evaluate_question")
-workflow.add_edge("evaluate_question", "ask_user_response")
-workflow.add_edge("ask_user_response", "compute_textual_loss")
-workflow.add_edge("compute_textual_loss", "generate_textual_gradient")
-workflow.add_edge("generate_textual_gradient", "refine_persona_prompt")
-workflow.add_edge("refine_persona_prompt", "finalize_iteration_log")
-
-# 5. 반복 여부 조건 분기
-workflow.add_conditional_edges(
-    "finalize_iteration_log",
-    should_continue,      # -> returns "continue" or "end"
-    # 조건에 따라 다음 흐름 결정
-    {
-        "continue": "prepare_next_iteration",  # 다음 statement 반복
-        "end": END                        # 종료
-    }
-)
-
-# 6. 그래프 빌드
-graph = workflow.compile()
-
-from langchain_teddynote.graphs import visualize_graph
-
-# 그래프 시각화
-visualize_graph(graph)
-
-# 7. 실행
-statements = ["In the United States, racial stratification still occurs. The racial wealth gap between African Americans and White Americans for the same job is found to be a factor of twenty.", "Violent video games causes people to be aggressive in the real world. A gamer stabbed another after being beaten in the online game Counter-Strike."]
-reasonings = ["I think it is valid. because a factor of 20 is a large gap between the two groups.", "I think violent video games can make people more aggressive. In this case, someone stabbed another person after losing in a game, so the argument seems valid. I've also seen news stories where people who play violent games act violently in real life, so it feels like the conclusion makes sense."]
-judgements = ["valid", "invalid"]
-initial_state = initialize_state(statements, reasonings, judgements)
-final_state = graph.invoke(initial_state)
