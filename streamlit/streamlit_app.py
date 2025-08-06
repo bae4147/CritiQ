@@ -67,9 +67,9 @@ current_statement = state["statements"][idx]
 if not st.session_state.submitted:
     st.markdown(f"### 🧠 Statement #{idx+1}")
     st.markdown("""주어진 제시문은 주장 1문장과 이를 뒷받침하는 근거 1문장으로 이루어져있습니다. 제시된 근거가 논리적으로 타당한 근거인지 판단해주세요.
-<중요>
-주장에 대한 자신의 의견을 서술하는 것이 아니라 근거가 주장을 논리적으로 잘 뒷받침하는지 여부를 판단해주셔야합니다.
-근거에 제시된 연구 결과 혹은 사례는 참이라는 것을 전제로 판단해주세요.
+\n<중요>
+\n- 주장에 대한 자신의 의견을 반영하여 판단하는 것이 아니라 근거가 주장을 논리적으로 잘 뒷받침하는지 여부를 판단해주셔야합니다.
+\n- 근거에 제시된 연구 결과 혹은 사례는 참이라는 것을 전제로 판단해주세요.
 """)
     st.markdown(f"<div style='border:1px solid #ccc; border-radius:10px; padding:10px;'>{current_statement}</div>", unsafe_allow_html=True)
 
@@ -107,6 +107,11 @@ elif st.session_state.submitted and not st.session_state.resubmitted:
       st.stop()
 
     st.markdown(f"### 🧠 Statement #{idx+1}")
+    st.markdown("""주어진 제시문은 주장 1문장과 이를 뒷받침하는 근거 1문장으로 이루어져있습니다. 제시된 근거가 논리적으로 타당한 근거인지 판단해주세요.
+\n<중요>
+\n- 주장에 대한 자신의 의견을 반영하여 판단하는 것이 아니라 근거가 주장을 논리적으로 잘 뒷받침하는지 여부를 판단해주셔야합니다.
+\n- 근거에 제시된 연구 결과 혹은 사례는 참이라는 것을 전제로 판단해주세요.
+""")
     st.markdown(f"<div style='border:1px solid #ccc; border-radius:10px; padding:10px;'>{current_statement}</div>", unsafe_allow_html=True)
     st.markdown("### 💡 Socratic Question")
     st.markdown(f"<div style='background-color:#FFF8DA; border-radius:10px; padding:10px;'>{q}</div>", unsafe_allow_html=True)
