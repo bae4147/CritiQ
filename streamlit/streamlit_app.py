@@ -9,6 +9,8 @@ from prototype import (
     finalize_iteration_log,
 )
 import json
+import base64
+from utils import create_iteration_tables, create_csv_download_link
 
 st.set_page_config(page_title="CritiQ Iterative", layout="centered")
 st.title("🧠 CritiQ - Iterative Reasoning with Persona Refinement")
@@ -33,7 +35,28 @@ idx = state["current_index"]
 if idx >= len(state["statements"]):
     st.success("🎉 All 5 iterations completed.")
     st.markdown("### 🧾 Full Iteration Logs")
-    st.code(json.dumps(state["iteration_logs"], indent=2), language="json")
+    # st.code(json.dumps(state["iteration_logs"], indent=2), language="json")
+
+        # 모든 반복이 완료된 후, 테이블과 CSV 다운로드 링크를 표시합니다.
+    if "iteration_logs" in st.session_state.state and st.session_state.state["iteration_logs"]:
+        st.markdown("---")
+        st.header("### 📈 Iteration Summary Tables")
+        
+        iteration_logs = st.session_state.state["iteration_logs"]
+        all_questions_df, best_question_df = create_iteration_tables(iteration_logs)
+        
+        # Table 1: All Socratic Questions per Iteration
+        st.subheader("✅ Table 1: All Socratic Questions per Iteration")
+        st.dataframe(all_questions_df, use_container_width=True)
+        st.markdown(create_csv_download_link(all_questions_df, "all_questions_log.csv"), unsafe_allow_html=True)
+        
+        st.markdown("---")
+
+        # Table 2: Best Question & Persona Refinement per Iteration
+        st.subheader("✅ Table 2: Best Question & Persona Refinement per Iteration")
+        st.dataframe(best_question_df, use_container_width=True)
+        st.markdown(create_csv_download_link(best_question_df, "best_question_refinement_log.csv"), unsafe_allow_html=True)
+    
     st.stop()
 
 current_statement = state["statements"][idx]
@@ -53,20 +76,21 @@ if not st.session_state.submitted:
         if not user_reasoning:
             st.error("이유를 입력해주세요.")
         else:
-            # 1. 상태에 사용자 입력 저장
-            st.session_state.state["user_reasoning"] = user_reasoning
-            st.session_state.state["user_judgement"] = user_judgement
+            with st.spinner("질문을 생성하고 있습니다. 잠시만 기다려주세요..."):
+                # 1. 상태에 사용자 입력 저장
+                st.session_state.state["user_reasoning"] = user_reasoning
+                st.session_state.state["user_judgement"] = user_judgement
 
-            # 2. 소크라테스식 질문 생성 및 평가 (함수 호출로 대체)
-            try:
-                st.session_state.state = generate_and_evaluate_questions(st.session_state.state)
-                st.session_state.submitted = True
-            except Exception as e:
-                import traceback
-                st.error("❌ 질문 생성 및 평가 중 예외가 발생했습니다.")
-                st.error(f"오류 메시지: {e}")
-                st.code(traceback.format_exc())
-                st.stop()
+                # 2. 소크라테스식 질문 생성 및 평가 (함수 호출로 대체)
+                try:
+                    st.session_state.state = generate_and_evaluate_questions(st.session_state.state)
+                    st.session_state.submitted = True
+                except Exception as e:
+                    import traceback
+                    st.error("❌ 질문 생성 및 평가 중 예외가 발생했습니다.")
+                    st.error(f"오류 메시지: {e}")
+                    st.code(traceback.format_exc())
+                    st.stop()
             st.rerun()
 
 # case 2: 질문 생성 후 수정 단계
@@ -82,6 +106,11 @@ elif st.session_state.submitted and not st.session_state.resubmitted:
     st.markdown("### 💡 Socratic Question")
     st.markdown(f"<div style='background-color:#FFF8DA; border-radius:10px; padding:10px;'>{q}</div>", unsafe_allow_html=True)
 
+    q_without_persona = state.get("question_without_persona")
+    with st.expander("비교용 : persona 없이 만들어진 질문"):
+        st.write(q_without_persona)
+
+
     prev_reasoning = state["user_reasoning"]
     prev_judgement = state["user_judgement"]
 
@@ -93,24 +122,25 @@ elif st.session_state.submitted and not st.session_state.resubmitted:
         if not updated_reasoning:
             st.error("수정된 이유를 입력해주세요.")
         else:
-            # 1. 최종 유저 응답을 state에 저장
-            st.session_state.state["final_user_response"] = {
-                "reasoning": updated_reasoning,
-                "judgement": updated_judgement
-            }
-            
-            # 2. 페르소나 개선 및 로그 기록 (함수 호출로 대체)
-            try:
-                st.session_state.state = refine_persona(st.session_state.state)
-                st.session_state.state = finalize_iteration_log(st.session_state.state)
-                st.session_state.resubmitted = True
-            except Exception as e:
-                import traceback
-                st.error("❌ 페르소나 개선 또는 로그 기록 중 예외가 발생했습니다.")
-                st.error(f"오류 메시지: {e}")
-                st.code(traceback.format_exc())
-                st.stop()
-            st.rerun()
+            with st.spinner("페르소나를 개선하고 로그를 기록하고 있습니다. 잠시만 기다려주세요..."):
+                # 1. 최종 유저 응답을 state에 저장
+                st.session_state.state["final_user_response"] = {
+                    "reasoning": updated_reasoning,
+                    "judgement": updated_judgement
+                }
+                
+                # 2. 페르소나 개선 및 로그 기록 (함수 호출로 대체)
+                try:
+                    st.session_state.state = refine_persona(st.session_state.state)
+                    st.session_state.state = finalize_iteration_log(st.session_state.state)
+                    st.session_state.resubmitted = True
+                except Exception as e:
+                    import traceback
+                    st.error("❌ 페르소나 개선 또는 로그 기록 중 예외가 발생했습니다.")
+                    st.error(f"오류 메시지: {e}")
+                    st.code(traceback.format_exc())
+                    st.stop()
+                st.rerun()
 
 # case 3: 반복 완료 및 다음 단계로 이동
 else:
@@ -118,7 +148,28 @@ else:
     st.markdown("### 📜 Raw Iteration Log")
     last_log = st.session_state.state["iteration_logs"][-1]
     st.markdown(f"### Iteration Done Count : {len(st.session_state.state['iteration_logs'])}")
-    st.code(json.dumps(last_log, indent=2), language="json")
+    # st.code(json.dumps(last_log, indent=2), language="json")
+
+    # 여기부터 테이블 표시 로직을 추가합니다.
+    if "iteration_logs" in st.session_state.state and st.session_state.state["iteration_logs"]:
+        st.markdown("---")
+        st.header("### 📈 Iteration Summary Tables")
+        
+        iteration_logs = st.session_state.state["iteration_logs"]
+        all_questions_df, best_question_df = create_iteration_tables(iteration_logs)
+        
+        # Table 1: All Socratic Questions per Iteration
+        st.subheader("✅ Table 1: All Socratic Questions per Iteration")
+        st.dataframe(all_questions_df, use_container_width=True)
+        st.markdown(create_csv_download_link(all_questions_df, "all_questions_log.csv"), unsafe_allow_html=True)
+        
+        st.markdown("---")
+
+        # Table 2: Best Question & Persona Refinement per Iteration
+        st.subheader("✅ Table 2: Best Question & Persona Refinement per Iteration")
+        st.dataframe(best_question_df, use_container_width=True)
+        st.markdown(create_csv_download_link(best_question_df, "best_question_refinement_log.csv"), unsafe_allow_html=True)
+
 
     if st.session_state.state["current_index"] < len(st.session_state.state["statements"]):
         if st.button("Next Statement"):
@@ -133,6 +184,7 @@ else:
             st.session_state.state["final_user_response"] = None
             st.session_state.state["textual_loss"] = None
             st.session_state.state["textual_gradient"] = None
+            st.session_state.state["question_without_persona"] = None
 
             # 플래그 초기화
             st.session_state.submitted = False

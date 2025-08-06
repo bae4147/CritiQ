@@ -31,6 +31,7 @@ class State(TypedDict):
     statements: list[str]
     iteration_logs: list[dict]
     current_index: int
+    question_without_persona: str
 
 # --- Helper Functions (unchanged from original) ---
 
@@ -143,6 +144,8 @@ revised judgement: {persona_judgement}
 evaluator_chain = evaluator_prompt | QG_model
 
 persona_model = ChatOpenAI(model="gpt-4o-mini")
+
+QG_without_persona_chain = QG_prompt | persona_model # persona_model을 붙이는 이유는 sampling 적용 안하는 모델이기 때문
 
 DEFAULT_PERSONA_SYSTEM_PROMPT = """
 You are simulating a user who is reasoning about an argumentative statement.  
@@ -293,6 +296,7 @@ def initialize_state(statements: list[str]) -> State:
         "current_persona_prompt": DEFAULT_PERSONA_SYSTEM_PROMPT,
         "textual_loss": None,
         "textual_gradient": None,
+        "question_without_persona": None
     }
 
 def generate_and_evaluate_questions(state: State) -> State:
@@ -305,13 +309,25 @@ def generate_and_evaluate_questions(state: State) -> State:
         }).content.strip()
         for _ in range(5)
     ]
+
     state["socratic_questions"] = questions
+
+    ###
+    question_without_persona = QG_without_persona_chain.invoke({
+            "statement": state["statement"],
+            "user_reasoning": state["user_reasoning"],
+            "user_judgement": state["user_judgement"]
+        }).content.strip()
+
+    ###
+    state["question_without_persona"] = question_without_persona
 
     # Simulate persona responses
     persona_prompt = ChatPromptTemplate.from_messages(
         [("system", state["current_persona_prompt"])] + PERSONA_USER_PROMPT.messages
     )
     persona_chain = persona_prompt | persona_model
+
     responses = []
     for q in questions:
         result = persona_chain.invoke({
@@ -431,7 +447,8 @@ def finalize_iteration_log(state: State) -> State:
             "textual_loss": state["textual_loss"],
             "textual_gradient": state["textual_gradient"],
             "refined_persona_prompt": state["current_persona_prompt"],
-        }
+        },
+        "question_without_persona": state["question_without_persona"]
     }
     state["iteration_logs"].append(iteration_data)
     state["current_index"] += 1
