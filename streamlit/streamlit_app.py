@@ -45,8 +45,9 @@ if not st.session_state.submitted:
     st.markdown(f"### 🧠 Statement #{idx+1}")
     st.markdown(f"<div style='border:1px solid #ccc; border-radius:10px; padding:10px;'>{current_statement}</div>", unsafe_allow_html=True)
 
-    user_reasoning = st.text_area("💭 Your Initial Reasoning")
     user_judgement = st.radio("🔎 Your Judgement", ["valid", "invalid"])
+    user_reasoning = st.text_area("💭 Your Initial Reasoning")
+    
 
     if st.button("Submit"):
         if not user_reasoning:
@@ -84,8 +85,9 @@ elif st.session_state.submitted and not st.session_state.resubmitted:
     prev_reasoning = state["user_reasoning"]
     prev_judgement = state["user_judgement"]
 
-    updated_reasoning = st.text_area("✏️ Revise Your Reasoning", value=prev_reasoning)
     updated_judgement = st.radio("🔁 Revise Your Judgement", options=["valid", "invalid"], index=0 if prev_judgement == "valid" else 1)
+    updated_reasoning = st.text_area("✏️ Revise Your Reasoning", value=prev_reasoning)
+    
 
     if st.button("Resubmit"):
         if not updated_reasoning:
