@@ -1,69 +1,142 @@
-# streamlit_app.py
+# streamlit_app.py (Refactored for sequential execution)
 
 import streamlit as st
+import copy
 from prototype import (
-    initialize_state_from_user, generate_question, evaluate_question,
-    State  # TypedDict
+    initialize_state,
+    generate_and_evaluate_questions,
+    refine_persona,
+    finalize_iteration_log,
 )
+import json
 
-st.set_page_config(layout="centered")
+st.set_page_config(page_title="CritiQ Iterative", layout="centered")
+st.title("🧠 CritiQ - Iterative Reasoning with Persona Refinement")
 
-if "stage" not in st.session_state:
-    st.session_state.stage = "input"  # input / generated / resubmitted
-    st.session_state.logs = []
+# ✅ 초기 설정: 세션 상태가 없으면 초기화
+if "state" not in st.session_state:
+    statements = [
+        "In the United States, racial stratification still occurs. The racial wealth gap between African Americans and White Americans for the same job is found to be a factor of twenty.",
+        "Governments should build high-rise buildings to solve the housing crisis. Some observations indicate that people tend to prefer housing in low-density areas.",
+        "Governments should not subsidize tobacco production.A recent study found that the risk of dying from lung cancer before age 85 is about 22 times higher for a male smoker than for a non-smoker, illustrating the massive public health cost of tobacco use.",
+        "The use of performance-enhancing drugs (PEDs) should be permitted in professional sports.According to some nurse practitioners, stopping all PED use may not be realistic, and regulated use could improve athlete safety while reducing underground abuse.",
+        "Unsustainable logging should be banned globally. Forest degradation has been consistently linked to biodiversity loss and long-term environmental disruption, which are difficult to reverse."
+    ]
+    st.session_state.state = initialize_state(statements)
+    st.session_state.submitted = False
+    st.session_state.resubmitted = False
 
-st.title("🧠 CritiQ - Socratic Assistant")
+state = st.session_state.state
+idx = state["current_index"]
 
-# === Stage 1: Input ===
-if st.session_state.stage == "input":
-    statement = st.text_area("📝 Statement", height=100)
-    reasoning = st.text_area("💭 Your Reasoning", height=150)
-    judgement = st.radio("🧪 Your Judgement", ["valid", "invalid"])
+# ✅ Iteration 종료 여부
+if idx >= len(state["statements"]):
+    st.success("🎉 All 5 iterations completed.")
+    st.markdown("### 🧾 Full Iteration Logs")
+    st.code(json.dumps(state["iteration_logs"], indent=2), language="json")
+    st.stop()
+
+current_statement = state["statements"][idx]
+
+
+# ✅ 현재 상태에 따라 UI 렌더링
+# case 1: 초기 답변 입력 단계
+if not st.session_state.submitted:
+    st.markdown(f"### 🧠 Statement #{idx+1}")
+    st.markdown(f"<div style='border:1px solid #ccc; border-radius:10px; padding:10px;'>{current_statement}</div>", unsafe_allow_html=True)
+
+    user_reasoning = st.text_area("💭 Your Initial Reasoning")
+    user_judgement = st.radio("🔎 Your Judgement", ["valid", "invalid"])
 
     if st.button("Submit"):
-        state = initialize_state_from_user(statement, reasoning, judgement)
-        state = generate_question(state)
-        state = evaluate_question(state)
+        if not user_reasoning:
+            st.error("이유를 입력해주세요.")
+        else:
+            # 1. 상태에 사용자 입력 저장
+            st.session_state.state["user_reasoning"] = user_reasoning
+            st.session_state.state["user_judgement"] = user_judgement
 
-        st.session_state.state = state
-        st.session_state.stage = "generated"
+            # 2. 소크라테스식 질문 생성 및 평가 (함수 호출로 대체)
+            try:
+                st.session_state.state = generate_and_evaluate_questions(st.session_state.state)
+                st.session_state.submitted = True
+            except Exception as e:
+                import traceback
+                st.error("❌ 질문 생성 및 평가 중 예외가 발생했습니다.")
+                st.error(f"오류 메시지: {e}")
+                st.code(traceback.format_exc())
+                st.stop()
+            st.rerun()
 
-# === Stage 2: Show generated question ===
-if st.session_state.stage == "generated":
+# case 2: 질문 생성 후 수정 단계
+elif st.session_state.submitted and not st.session_state.resubmitted:
     state = st.session_state.state
+    q = state.get("best_question")
+    if not q:
+      st.error("best_question이 생성되지 않았습니다. 이전 단계에서 오류가 발생했을 수 있습니다.")
+      st.stop()
 
-    st.markdown("### 🧠 Statement")
-    st.markdown(f'<div style="border:1px solid #ccc; border-radius:10px; padding:10px;">{state["statement"]}</div>', unsafe_allow_html=True)
-
+    st.markdown(f"### 🧠 Statement #{idx+1}")
+    st.markdown(f"<div style='border:1px solid #ccc; border-radius:10px; padding:10px;'>{current_statement}</div>", unsafe_allow_html=True)
     st.markdown("### 💡 Socratic Question")
-    st.markdown(f'<div style="background-color:#FFF8DA; border-radius:10px; padding:10px;">{state["best_question"]}</div>', unsafe_allow_html=True)
+    st.markdown(f"<div style='background-color:#FFF8DA; border-radius:10px; padding:10px;'>{q}</div>", unsafe_allow_html=True)
 
-    revised_reasoning = st.text_area("✏️ Update Your Reasoning", height=150)
-    revised_judgement = st.radio("🔁 Update Your Judgement", ["valid", "invalid"])
+    prev_reasoning = state["user_reasoning"]
+    prev_judgement = state["user_judgement"]
+
+    updated_reasoning = st.text_area("✏️ Revise Your Reasoning", value=prev_reasoning)
+    updated_judgement = st.radio("🔁 Revise Your Judgement", options=["valid", "invalid"], index=0 if prev_judgement == "valid" else 1)
 
     if st.button("Resubmit"):
-        st.session_state.stage = "resubmitted"
-        st.session_state.logs.append({
-            "statement": state["statement"],
-            "question": state["best_question"],
-            "original_reasoning": state["user_reasoning"],
-            "original_judgement": state["user_judgement"],
-            "revised_reasoning": revised_reasoning,
-            "revised_judgement": revised_judgement
-        })
+        if not updated_reasoning:
+            st.error("수정된 이유를 입력해주세요.")
+        else:
+            # 1. 최종 유저 응답을 state에 저장
+            st.session_state.state["final_user_response"] = {
+                "reasoning": updated_reasoning,
+                "judgement": updated_judgement
+            }
+            
+            # 2. 페르소나 개선 및 로그 기록 (함수 호출로 대체)
+            try:
+                st.session_state.state = refine_persona(st.session_state.state)
+                st.session_state.state = finalize_iteration_log(st.session_state.state)
+                st.session_state.resubmitted = True
+            except Exception as e:
+                import traceback
+                st.error("❌ 페르소나 개선 또는 로그 기록 중 예외가 발생했습니다.")
+                st.error(f"오류 메시지: {e}")
+                st.code(traceback.format_exc())
+                st.stop()
+            st.rerun()
 
-# === Stage 3: Show logs ===
-if st.session_state.stage == "resubmitted":
-    st.markdown("## 📜 Response Log")
+# case 3: 반복 완료 및 다음 단계로 이동
+else:
+    st.success("✅ Iteration Completed")
+    st.markdown("### 📜 Raw Iteration Log")
+    last_log = st.session_state.state["iteration_logs"][-1]
+    st.markdown(f"### Iteration Done Count : {len(st.session_state.state['iteration_logs'])}")
+    st.code(json.dumps(last_log, indent=2), language="json")
 
-    for i, log in enumerate(st.session_state.logs):
-        with st.expander(f"Log {i+1}"):
-            st.markdown(f"**Statement:** {log['statement']}")
-            st.markdown(f"**Socratic Question:** {log['question']}")
-            st.markdown(f"- Original Reasoning: {log['original_reasoning']}")
-            st.markdown(f"- Original Judgement: **{log['original_judgement']}**")
-            st.markdown(f"- Revised Reasoning: {log['revised_reasoning']}")
-            st.markdown(f"- Revised Judgement: **{log['revised_judgement']}**")
+    if st.session_state.state["current_index"] < len(st.session_state.state["statements"]):
+        if st.button("Next Statement"):
+            # 다음 Statement를 위해 상태 초기화
+            st.session_state.state["statement"] = st.session_state.state["statements"][st.session_state.state["current_index"]]
+            st.session_state.state["user_reasoning"] = ""
+            st.session_state.state["user_judgement"] = ""
+            st.session_state.state["socratic_questions"] = []
+            st.session_state.state["persona_responses"] = []
+            st.session_state.state["best_question"] = None
+            st.session_state.state["best_response"] = None
+            st.session_state.state["final_user_response"] = None
+            st.session_state.state["textual_loss"] = None
+            st.session_state.state["textual_gradient"] = None
 
-    if st.button("🔁 Start New"):
-        st.session_state.stage = "input"
+            # 플래그 초기화
+            st.session_state.submitted = False
+            st.session_state.resubmitted = False
+            
+            st.rerun()
+
+    else:
+        st.success("🎉 모든 Statement에 대한 평가가 완료되었습니다!")
